@@ -1,4 +1,5 @@
 import * as pdfjsLib from "pdfjs-dist";
+import type { PDFPageProxy } from "pdfjs-dist";
 
 // Use CDN worker for pdf.js
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs`;
@@ -34,8 +35,14 @@ export interface PDFParseResult {
  * Extract actual embedded images from a single PDF page using the operator list.
  * PDF.js exposes image paint operators (OPS.paintImageXObject / paintJpegXObject).
  */
+interface PDFImageData {
+  width: number;
+  height: number;
+  data?: Uint8ClampedArray | Uint8Array;
+}
+
 async function extractPageImages(
-  page: any,
+  page: PDFPageProxy,
   pageNumber: number
 ): Promise<ExtractedImage[]> {
   const images: ExtractedImage[] = [];
@@ -59,8 +66,8 @@ async function extractPageImages(
         seenObjIds.add(objId);
 
         try {
-          const imgData = await new Promise<any>((resolve, reject) => {
-            page.objs.get(objId, (data: any) => {
+          const imgData = await new Promise<ImageBitmap | PDFImageData>((resolve, reject) => {
+            page.objs.get(objId, (data: ImageBitmap | PDFImageData | null) => {
               if (data) resolve(data);
               else reject(new Error("No image data"));
             });
@@ -74,7 +81,8 @@ async function extractPageImages(
           const canvas = document.createElement("canvas");
           canvas.width = w;
           canvas.height = h;
-          const ctx = canvas.getContext("2d")!;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) continue;
 
           // Handle different image data formats from PDF.js
           if (imgData instanceof ImageBitmap) {
@@ -118,13 +126,13 @@ async function extractPageImages(
             height: h,
             index: imgIndex++,
           });
-        } catch {
-          // Individual image extraction failed, continue
+        } catch (err) {
+          console.warn(`Failed to extract image ${objId} on page ${pageNumber}:`, err);
         }
       }
     }
-  } catch {
-    // Operator list extraction failed for this page
+  } catch (err) {
+    console.warn(`Failed to get operator list for page ${pageNumber}:`, err);
   }
 
   return images;
@@ -153,7 +161,7 @@ export async function parsePDF(file: File): Promise<PDFParseResult> {
     // Extract text from ALL pages
     const textContent = await page.getTextContent();
     const pageText = textContent.items
-      .map((item: any) => item.str)
+      .map((item: { str: string }) => item.str)
       .join(" ")
       .replace(/\s+/g, " ")
       .trim();
@@ -166,7 +174,14 @@ export async function parsePDF(file: File): Promise<PDFParseResult> {
       const canvas = document.createElement("canvas");
       canvas.width = viewport.width;
       canvas.height = viewport.height;
-      const ctx = canvas.getContext("2d")!;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        console.warn(`Failed to get 2D context for page ${i} canvas`);
+        pages.push({ pageNumber: i, text: pageText, imageBase64: "" });
+        const pageImages = await extractPageImages(page, i);
+        allExtractedImages.push(...pageImages);
+        continue;
+      }
       await page.render({ canvasContext: ctx, viewport }).promise;
       imageBase64 = canvas.toDataURL("image/jpeg", 0.5);
     }

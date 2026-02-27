@@ -1,6 +1,8 @@
 import type { ExtractedImage } from "@/services/pdfParser";
 
-const API_URL = "https://contentanalyticsai-production.up.railway.app";
+const API_URL =
+  import.meta.env.VITE_RAILWAY_API_URL ??
+  "https://contentanalyticsai-production.up.railway.app";
 
 interface RailwayImage {
   index: number;
